@@ -1,0 +1,63 @@
+name: Docker Compose Deployment
+description: "Runs Docker Compose commons on a Docker Daemon via AWS SSM"
+inputs:
+  project:
+    description: Docker Compose project name
+    required: true
+  role:
+    description: AWS role ARN to assume for action
+    required: true
+  region:
+    description: AWS Region
+    required: true
+    default: "us-east-1"
+  remote_docker_host:
+    description: Remote Docker host ie (user@host)
+    required: true
+  args:
+    description: Deployment command args.
+    required: true
+  stack_file_name:
+    description: Docker stack file used. Default is docker-compose.yaml
+    required: false
+    default: docker-compose.yaml -f docker-compose.release.yaml
+  ssh_port:
+    description: The ssh port of the server. Default is 22
+    required: false
+runs:
+  using: composite
+  steps:
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ inputs.role }}
+        role-session-name: gha-deploy-${{ inputs.project }}-${{ inputs.service }}
+        aws-region: ${{ inputs.region }}
+    - name: Show AWS caller identity
+      shell: sh
+      run: aws sts get-caller-identity
+    - name: Install cross-cloud SSH config
+      shell: sh
+      run: |
+        mkdir -p ~/.ssh
+        chown 700 ~/.ssh
+        curl -s -o ~/.ssh/config https://raw.githubusercontent.com/acrois/scripts/ssh-config-cloud-providers/.ssh/config
+        chown 600 ~/.ssh/config
+    - name: Start deployment
+      shell: sh
+      run: |
+        STACK_FILE=${INPUT_STACK_FILE_NAME:+"-f "}${INPUT_STACK_FILE_NAME}
+        SSH_PORT_OPTION=${INPUT_SSH_PORT:+":"}${INPUT_SSH_PORT}
+        DOCKER_HOST=ssh://$INPUT_REMOTE_DOCKER_HOST$SSH_PORT_OPTION
+        DEPLOYMENT_COMMAND_OPTIONS="--host $DOCKER_HOST"
+        DEPLOYMENT_COMMAND="docker-compose $STACK_FILE"
+        SSH_HOST=${INPUT_REMOTE_DOCKER_HOST#*@}
+        docker context create deployment --docker "host=$DOCKER_HOST"
+        docker context use deployment
+        ${DEPLOYMENT_COMMAND} ${DEPLOYMENT_COMMAND_OPTIONS} pull
+        ${DEPLOYMENT_COMMAND} ${DEPLOYMENT_COMMAND_OPTIONS} ${INPUT_ARGS}
+      env:
+        INPUT_REMOTE_DOCKER_HOST: ${{ inputs.remote_docker_host }}
+        INPUT_SSH_PORT: ${{ inputs.ssh_port }}
+        INPUT_ARGS: ${{ inputs.args }}
+        INPUT_STACK_FILE_NAME: ${{ inputs.stack_file_name }}
